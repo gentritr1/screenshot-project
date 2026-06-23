@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 @MainActor
@@ -9,7 +10,12 @@ final class StatusItemController: NSObject {
 
     private let captureItem = NSMenuItem()
     private let statusItemText = NSMenuItem()
+    private let lastCaptureItem = NSMenuItem()
+    private let revealLastItem = NSMenuItem()
+    private let copyLastPathItem = NSMenuItem()
+    private let copyLastMarkdownItem = NSMenuItem()
     private var isCapturing = false
+    private var lastScreenshot: ScreenshotResult?
     private var resetStatusWorkItem: DispatchWorkItem?
 
     override init() {
@@ -56,6 +62,33 @@ final class StatusItemController: NSObject {
         statusItemText.title = "Ready"
         statusItemText.isEnabled = false
         menu.addItem(statusItemText)
+
+        menu.addItem(.separator())
+
+        lastCaptureItem.title = "Last: None"
+        lastCaptureItem.isEnabled = false
+        menu.addItem(lastCaptureItem)
+
+        revealLastItem.title = "Reveal Last Capture"
+        revealLastItem.target = self
+        revealLastItem.action = #selector(revealLastCapture)
+        revealLastItem.keyEquivalent = ""
+        revealLastItem.isEnabled = false
+        menu.addItem(revealLastItem)
+
+        copyLastPathItem.title = "Copy Last Path"
+        copyLastPathItem.target = self
+        copyLastPathItem.action = #selector(copyLastPath)
+        copyLastPathItem.keyEquivalent = ""
+        copyLastPathItem.isEnabled = false
+        menu.addItem(copyLastPathItem)
+
+        copyLastMarkdownItem.title = "Copy Bug Report Markdown"
+        copyLastMarkdownItem.target = self
+        copyLastMarkdownItem.action = #selector(copyLastMarkdown)
+        copyLastMarkdownItem.keyEquivalent = ""
+        copyLastMarkdownItem.isEnabled = false
+        menu.addItem(copyLastMarkdownItem)
 
         menu.addItem(.separator())
 
@@ -129,9 +162,11 @@ final class StatusItemController: NSObject {
         captureItem.isEnabled = false
         setStatus("Capturing...")
 
+        let context = currentCaptureContext()
+
         DispatchQueue.global(qos: .userInitiated).async { [screenshotService] in
             let result = Result {
-                try screenshotService.captureMainDisplay()
+                try screenshotService.captureMainDisplay(context: context)
             }
 
             DispatchQueue.main.async { [weak self] in
@@ -147,8 +182,10 @@ final class StatusItemController: NSObject {
         switch result {
         case .success(let screenshot):
             Task { @MainActor in
+                lastScreenshot = screenshot
+                updateLastCaptureItems()
                 screenshotService.copyToClipboard(screenshot.image)
-                setStatus("Saved and copied")
+                setStatus("Saved \(screenshot.context.appName) and copied")
             }
         case .failure(let error):
             setStatus("Capture failed")
@@ -174,6 +211,60 @@ final class StatusItemController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
     }
 
+    private func currentCaptureContext() -> CaptureContext {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return .unknown
+        }
+
+        let appName = app.localizedName ?? "Unknown App"
+
+        return CaptureContext(
+            appName: appName,
+            bundleIdentifier: app.bundleIdentifier,
+            windowTitle: frontWindowTitle(for: app.processIdentifier)
+        )
+    }
+
+    private func frontWindowTitle(for processIdentifier: pid_t) -> String? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        for window in windowList {
+            guard
+                let ownerPID = window[kCGWindowOwnerPID as String] as? Int,
+                ownerPID == Int(processIdentifier),
+                let layer = window[kCGWindowLayer as String] as? Int,
+                layer == 0
+            else {
+                continue
+            }
+
+            let title = window[kCGWindowName as String] as? String
+            if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return title
+            }
+        }
+
+        return nil
+    }
+
+    private func updateLastCaptureItems() {
+        guard let screenshot = lastScreenshot else {
+            lastCaptureItem.title = "Last: None"
+            revealLastItem.isEnabled = false
+            copyLastPathItem.isEnabled = false
+            copyLastMarkdownItem.isEnabled = false
+            return
+        }
+
+        lastCaptureItem.title = "Last: \(screenshot.context.appName) · \(screenshot.pixelSizeDescription)"
+        revealLastItem.isEnabled = true
+        copyLastPathItem.isEnabled = true
+        copyLastMarkdownItem.isEnabled = true
+    }
+
     @objc private func openScreenshotsFolder() {
         let folder = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("NeekShot", isDirectory: true)
@@ -186,6 +277,32 @@ final class StatusItemController: NSObject {
         NSWorkspace.shared.open(folder)
     }
 
+    @objc private func revealLastCapture() {
+        guard let lastScreenshot else {
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([lastScreenshot.fileURL])
+    }
+
+    @objc private func copyLastPath() {
+        guard let lastScreenshot else {
+            return
+        }
+
+        screenshotService.copyTextToClipboard(lastScreenshot.fileURL.path)
+        setStatus("Copied last path")
+    }
+
+    @objc private func copyLastMarkdown() {
+        guard let lastScreenshot else {
+            return
+        }
+
+        screenshotService.copyTextToClipboard(lastScreenshot.markdownSnippet)
+        setStatus("Copied bug report Markdown")
+    }
+
     @objc private func requestScreenCapturePermission() {
         ScreenPermissionService.requestScreenCaptureAccess()
     }
@@ -196,5 +313,11 @@ final class StatusItemController: NSObject {
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+}
+
+private extension ScreenshotResult {
+    var pixelSizeDescription: String {
+        "\(image.width)x\(image.height)"
     }
 }

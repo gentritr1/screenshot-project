@@ -2,7 +2,7 @@
 
 Native macOS menu bar screenshot utility focused on silent, non-blocking capture.
 
-The first version captures the main display from a global hotkey, saves a PNG to `~/Pictures/NeekShot`, copies it to the clipboard, and avoids opening a capture overlay or editor.
+The first version captures the main display from a global hotkey, saves a PNG to `~/Pictures/NeekShot`, copies it to the clipboard, and avoids opening a capture overlay or editor. Captures are grouped by the frontmost app and include a local JSON sidecar for bug reports and debugging context.
 
 ## Why
 
@@ -32,8 +32,11 @@ Existing tools cover adjacent workflows:
 - Menu bar only app
 - Global hotkey: `Control + Option + Command + S`
 - Silent main-display screenshot
-- Auto-save to `~/Pictures/NeekShot`
+- Auto-save to app-specific folders under `~/Pictures/NeekShot`
 - Auto-copy to clipboard
+- Contextual filenames using the frontmost app/window
+- Local `.capture.json` sidecars with timestamp, app, window, size, and SHA-256
+- Menu actions to reveal the last capture, copy its path, or copy a bug-report Markdown snippet
 - Permission helper for macOS Screen Recording access
 - No cloud upload
 - No editor
